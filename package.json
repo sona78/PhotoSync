@@ -1,0 +1,27 @@
+{
+  "name": "photosync",
+  "version": "1.0.0",
+  "description": "An Electron application",
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "build": "electron-builder",
+    "server": "node server.js"
+  },
+  "keywords": [
+    "electron"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "dependencies": {
+    "electron-store": "^11.0.2",
+    "express": "^5.2.1",
+    "sharp": "^0.34.5"
+  }
+}

@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>PhotoSync</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #ffffff;
+      font-family: 'VT323', 'Courier New', monospace;
+      color: #000;
+      padding: 0;
+      font-size: 20px;
+      line-height: 1.5;
+      overflow: hidden;
+    }
+
+    .container {
+      width: 100vw;
+      height: 100vh;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .header {
+      background: #000;
+      color: #fff;
+      padding: 12px 16px;
+      font-size: 24px;
+      letter-spacing: 3px;
+      text-align: center;
+      border-bottom: 3px solid #000;
+      flex-shrink: 0;
+    }
+
+    .content {
+      padding: 30px;
+      background: #fff;
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    /* Gallery Styles */
+    .gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 15px;
+    }
+
+    .photo-item {
+      border: 2px solid #000;
+      background: #fff;
+      aspect-ratio: 1;
+      cursor: pointer;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .photo-item:hover {
+      border-color: #666;
+    }
+
+    .photo-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .photo-loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: #999;
+      font-size: 16px;
+    }
+
+    .gallery-empty {
+      text-align: center;
+      padding: 100px 20px;
+      color: #999;
+      font-size: 18px;
+    }
+
+    /* Settings Styles */
+    .section-title {
+      font-size: 18px;
+      color: #666;
+      margin-bottom: 15px;
+      letter-spacing: 2px;
+    }
+
+    button {
+      font-family: 'VT323', 'Courier New', monospace;
+      font-size: 20px;
+      padding: 12px 20px;
+      background: #fff;
+      color: #000;
+      border: 3px solid #000;
+      cursor: pointer;
+      letter-spacing: 2px;
+      transition: all 0.1s;
+    }
+
+    button:hover {
+      background: #000;
+      color: #fff;
+    }
+
+    button:active {
+      background: #333;
+      border-color: #333;
+    }
+
+    #add-path-btn {
+      width: 100%;
+      margin-bottom: 20px;
+      padding: 16px;
+      font-size: 22px;
+    }
+
+    #paths-list {
+      border: 3px solid #000;
+      background: #fff;
+      min-height: 200px;
+    }
+
+    #paths-list p {
+      color: #999;
+      font-size: 18px;
+      text-align: center;
+      padding: 80px 20px;
+      letter-spacing: 1px;
+    }
+
+    ul {
+      list-style: none;
+      padding: 0;
+    }
+
+    li {
+      background: #fff;
+      border-bottom: 2px solid #ccc;
+      padding: 16px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 18px;
+    }
+
+    li:last-child {
+      border-bottom: none;
+    }
+
+    li:hover {
+      background: #f5f5f5;
+    }
+
+    li span {
+      color: #000;
+      word-break: break-all;
+    }
+
+    li button {
+      padding: 8px 16px;
+      font-size: 18px;
+      background: #fff;
+      border: 2px solid #000;
+      margin: 0;
+      flex-shrink: 0;
+      margin-left: 12px;
+    }
+
+    li button:hover {
+      background: #000;
+      color: #fff;
+    }
+
+    /* Tab Bar */
+    .tab-bar {
+      background: #f0f0f0;
+      border-top: 3px solid #000;
+      display: flex;
+      flex-shrink: 0;
+    }
+
+    .tab {
+      flex: 1;
+      padding: 16px;
+      text-align: center;
+      font-size: 20px;
+      letter-spacing: 2px;
+      cursor: pointer;
+      background: #f0f0f0;
+      color: #666;
+      border-right: 2px solid #ccc;
+      transition: all 0.1s;
+    }
+
+    .tab:last-child {
+      border-right: none;
+    }
+
+    .tab:hover {
+      background: #e0e0e0;
+    }
+
+    .tab.active {
+      background: #fff;
+      color: #000;
+      font-weight: bold;
+    }
+
+    /* Status Bar */
+    .status-bar {
+      background: #f0f0f0;
+      border-top: 2px solid #ccc;
+      padding: 10px 18px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 16px;
+      color: #666;
+      letter-spacing: 1px;
+      flex-shrink: 0;
+    }
+
+    .status-item {
+      display: flex;
+      gap: 10px;
+    }
+
+    #status {
+      color: #000;
+    }
+
+    .blink {
+      animation: blink 1s infinite;
+    }
+
+    @keyframes blink {
+      0%, 50% { opacity: 1; }
+      51%, 100% { opacity: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">PHOTOSYNC</div>
+
+    <div class="content">
+      <!-- Gallery Tab -->
+      <div id="tab-gallery" class="tab-content active">
+        <div class="section-title">PHOTO GALLERY</div>
+        <div id="gallery" class="gallery">
+          <div class="gallery-empty">NO PHOTOS FOUND<br>CONFIGURE DIRECTORIES IN SETTINGS</div>
+        </div>
+      </div>
+
+      <!-- Settings Tab -->
+      <div id="tab-settings" class="tab-content">
+        <div class="section-title">DIRECTORY MANAGER</div>
+        <button id="add-path-btn">SELECT DIRECTORY</button>
+        <div id="paths-list">
+          <p>NO DIRECTORIES</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab Bar -->
+    <div class="tab-bar">
+      <div class="tab active" data-tab="gallery">GALLERY</div>
+      <div class="tab" data-tab="settings">SETTINGS</div>
+    </div>
+
+    <!-- Status Bar -->
+    <div class="status-bar">
+      <div class="status-item">
+        <span>STATUS:</span>
+        <span id="status">IDLE</span>
+      </div>
+      <div class="status-item">
+        <span>PHOTOS:</span>
+        <span id="photo-count">0</span>
+      </div>
+      <div class="status-item">
+        <span>PATHS:</span>
+        <span id="path-count">0</span>
+      </div>
+      <div class="status-item">
+        <span class="blink">█</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
