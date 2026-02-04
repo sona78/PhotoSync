@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadCertificateFileName</key>
+			<string>PhotoSync-CA.pem</string>
+			<key>PayloadContent</key>
+			<data>
+			MIIDjTCCAnWgAwIBAgIBATANBgkqhkiG9w0BAQsFADBoMRswGQYDVQQDExJQaG90b1N5bmMgTG9jYWwgQ0ExCzAJBgNVBAYTAlVTMRIwEAYDVQQKEwlQaG90b1N5bmMxKDAmBgNVBAsTH1Bob3RvU3luYyBDZXJ0aWZpY2F0ZSBBdXRob3JpdHkwHhcNMjYwMTI4MjM1OTUxWhcNMzYwMTI4MjM1OTUxWjBoMRswGQYDVQQDExJQaG90b1N5bmMgTG9jYWwgQ0ExCzAJBgNVBAYTAlVTMRIwEAYDVQQKEwlQaG90b1N5bmMxKDAmBgNVBAsTH1Bob3RvU3luYyBDZXJ0aWZpY2F0ZSBBdXRob3JpdHkwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCgKf9lE+l8vpkYgCXYXDww2VrJyVAHDvcxj9kU7NBmFRkGud1o+jNoVwaucDtjoF8jrKD8VdR4a9tSNdMnS6QOidvZwhZWwfO39FQEZj0oSuw98qb0Xx7nqRRam1NbFgALBKBA+HxEBk1Ap1i5PpUFQYH8Jq49c3Ad8qTIBrT+tv//RAXgDh4mR01JBbjpX7ie3zppgIB5PVlhj4PmJL7DyrJOHqY5utogChw0+h7lsUeN7/7Rl1TFbviEvIlBFCRBZpI8LWofR3kdz+pvzlqiOD6TyeEpMNrz0895k56geXOK0GmBF3q+cPBs6hEWLKm4Tp/HVSyJHepzLVNvjhK3AgMBAAGjQjBAMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBQK7eMpebCCAmOrLQ2U2kd4pde5JTANBgkqhkiG9w0BAQsFAAOCAQEAiGez5QPzRQsDSJt/bwFv05rQzs9NlvsdGmYNL+Xvmwk4Ouws+gOlGTAKXEHI6lyvBSblxQoYeOW601VTYN2c9o+oyEZFyIARxHU/YDods3Ifmu3M219ibxtP+g8HhB+KHSQJtO+AqoI9hRPVoq+mc6Y1Fzteb86TTsWQZ7OjgCTcG8qGFC8DZsn3bdx/lEj0LE8LEL0LEd6xW692LdViXh4X90ac84rEqJZrl/GgrkrPvQQ0rqTEkcj6KZq0ADeu1D02boZB+9og8Z97jAQ8Wh7fLmkkL+0PWYTFkQrBQowcO+wgSt3dCgVjn8kKqLgt0im7bO6tvj3s+ZcbyiBhxw==
+			</data>
+			<key>PayloadDescription</key>
+			<string>Installs the PhotoSync Certificate Authority certificate</string>
+			<key>PayloadDisplayName</key>
+			<string>PhotoSync Local CA</string>
+			<key>PayloadIdentifier</key>
+			<string>com.photosync.ca.b85f23c9-a521-4106-849c-3ba9f265739f</string>
+			<key>PayloadType</key>
+			<string>com.apple.security.root</string>
+			<key>PayloadUUID</key>
+			<string>b85f23c9-a521-4106-849c-3ba9f265739f</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+	</array>
+	<key>PayloadDescription</key>
+	<string>This profile installs the PhotoSync Certificate Authority to enable secure connections between your iOS device and PhotoSync server.</string>
+	<key>PayloadDisplayName</key>
+	<string>PhotoSync Certificate</string>
+	<key>PayloadIdentifier</key>
+	<string>com.photosync.profile</string>
+	<key>PayloadRemovalDisallowed</key>
+	<false/>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>bddbf694-a8b3-4db8-b9bf-ab1dd5edec06</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+	<key>PayloadOrganization</key>
+	<string>PhotoSync</string>
+</dict>
+</plist>

@@ -1,0 +1,12 @@
+{
+	"deviceId": "485923303db1361c8d7deeea395d4f9a",
+	"roomId": "4fb47485ef66a2a9",
+	"deviceName": "Desktop Device",
+	"createdAt": 1770221594635,
+	"lastUsed": 1770222633979,
+	"qrConfig": {
+		"type": "webrtc",
+		"signalingServer": "wss://photosync-signaling.onrender.com",
+		"version": "1.0"
+	}
+}

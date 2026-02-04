@@ -35,5 +35,32 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // Get statistics
     getStats: () => ipcRenderer.invoke('paths:getStats')
+  },
+
+  // Device pairing management
+  devicePairing: {
+    // Generate QR code for device pairing
+    generateQR: (metadata) => ipcRenderer.invoke('device:generateQR', metadata),
+
+    // Generate QR code with specific IP address
+    generateQRWithIP: (ipAddress, metadata) => ipcRenderer.invoke('device:generateQRWithIP', ipAddress, metadata),
+
+    // Get all available network addresses
+    getNetworkAddresses: () => ipcRenderer.invoke('device:getNetworkAddresses'),
+
+    // Get device configuration
+    getConfig: () => ipcRenderer.invoke('device:getConfig'),
+
+    // Regenerate QR code (manual user action)
+    regenerateQR: (reason) => ipcRenderer.invoke('device:regenerateQR', reason),
+
+    // Get all device tokens
+    getAll: () => ipcRenderer.invoke('device:getAll'),
+
+    // Revoke a device token
+    revoke: (token) => ipcRenderer.invoke('device:revoke', token),
+
+    // Delete a device token
+    delete: (token) => ipcRenderer.invoke('device:delete', token)
   }
 });

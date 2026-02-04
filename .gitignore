@@ -6,3 +6,14 @@ build/
 *.swp
 *.swo
 *~
+*.env
+.cache/
+.claude/
+
+# SSL Certificates (self-signed for development)
+*.pem
+cert.pem
+key.pem
+
+# WebRTC runtime config
+.webrtc-room-id

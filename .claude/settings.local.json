@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(netstat:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(dir:*)",
+      "Bash(test:*)",
+      "Bash(npm install)",
+      "Bash(node:*)"
     ],
     "deny": [],
     "ask": []

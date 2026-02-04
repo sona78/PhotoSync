@@ -1,17 +1,26 @@
 import express from 'express';
+import https from 'https';
 import fs from 'fs';
 import path from 'path';
 import sharp from 'sharp';
 import crypto from 'crypto';
+import os from 'os';
 import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
 import photoPathsManager from './photo-paths-manager-server.js';
+import SocketIOServer from './server/SocketIOServer.js';
+import WebRTCManager from './WebRTCManager.js';
+
+// Load environment variables
+dotenv.config();
 
 const fsPromises = fs.promises;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const HTTP_PORT = 3000;
+const HTTPS_PORT = 3001;
 
 // Configuration
 const CACHE_DIRECTORY = path.join(__dirname, '.cache');
@@ -19,6 +28,68 @@ const CACHE_DIRECTORY = path.join(__dirname, '.cache');
 // In-memory storage
 let photosDatabase = [];
 let compressionCache = new Map();
+let photoDb; // PhotoDatabase wrapper - initialized after scanPhotos()
+let previousPhotoCount = 0; // Track for manifest change detection
+let wsServerInstance = null; // WebSocket server reference for broadcasting updates
+let webrtcManager = null; // WebRTC manager instance
+let webrtcReady = false; // Track if WebRTC is connected to signaling server
+let webrtcReadyPromise = null; // Promise that resolves when WebRTC is ready
+
+/**
+ * PhotoDatabase wrapper class
+ * Provides abstraction over the photosDatabase array
+ */
+class PhotoDatabase {
+  constructor() {
+    this.database = photosDatabase;
+  }
+
+  /**
+   * Get all photos
+   * @returns {Array<Object>} Array of photo objects
+   */
+  getAllPhotos() {
+    console.log(`[PhotoDatabase] getAllPhotos() called - returning ${this.database.length} photos`);
+    console.log(`[PhotoDatabase] Global photosDatabase has ${photosDatabase.length} photos`);
+    console.log(`[PhotoDatabase] Are they the same reference? ${this.database === photosDatabase}`);
+    return this.database;
+  }
+
+  /**
+   * Get single photo by ID
+   * @param {string} id - Photo ID (16-char hex)
+   * @returns {Object|null} Photo object or null if not found
+   */
+  getPhoto(id) {
+    return this.database.find(p => p.id === id) || null;
+  }
+
+  /**
+   * Get single photo by ID (alias for WebRTC compatibility)
+   * @param {string} id - Photo ID (16-char hex)
+   * @returns {Object|null} Photo object or null if not found
+   */
+  getPhotoById(id) {
+    return this.getPhoto(id);
+  }
+
+  /**
+   * Get photo count
+   * @returns {number}
+   */
+  getCount() {
+    return this.database.length;
+  }
+
+  /**
+   * Check if photo exists
+   * @param {string} id - Photo ID
+   * @returns {boolean}
+   */
+  hasPhoto(id) {
+    return this.database.some(p => p.id === id);
+  }
+}
 
 /**
  * Generate a unique ID for a photo based on its path and modified time
@@ -63,12 +134,61 @@ async function getImageDimensions(filePath) {
 }
 
 /**
+ * Recursively scan a directory for image files
+ * @param {string} dirPath - Directory to scan
+ * @param {Array} results - Array to collect photo objects
+ * @returns {Promise<number>} - Number of photos found
+ */
+async function scanDirectoryRecursive(dirPath, results = []) {
+  let photoCount = 0;
+
+  try {
+    const entries = await fsPromises.readdir(dirPath, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+
+      if (entry.isDirectory()) {
+        // Recursively scan subdirectory
+        const subCount = await scanDirectoryRecursive(fullPath, results);
+        photoCount += subCount;
+      } else if (entry.isFile() && isImageFile(entry.name)) {
+        // Process image file
+        try {
+          const stats = await fsPromises.stat(fullPath);
+          const id = generatePhotoId(fullPath, stats.mtimeMs);
+          const dimensions = await getImageDimensions(fullPath);
+
+          results.push({
+            id,
+            filename: entry.name,
+            path: fullPath,
+            size: stats.size,
+            modified: stats.mtimeMs,
+            width: dimensions.width,
+            height: dimensions.height
+          });
+
+          photoCount++;
+        } catch (error) {
+          console.error(`Error processing ${fullPath}:`, error.message);
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`Error scanning directory ${dirPath}:`, error.message);
+  }
+
+  return photoCount;
+}
+
+/**
  * Scan configured directories for photos and populate database
  * @returns {Promise<void>}
  */
 async function scanPhotos() {
   console.log('Scanning photos from configured paths...');
-  photosDatabase = [];
+  photosDatabase.length = 0; // Clear array without breaking reference
 
   try {
     // Get enabled paths from store
@@ -81,7 +201,7 @@ async function scanPhotos() {
 
     console.log(`Scanning ${enabledPaths.length} configured path(s)...`);
 
-    // Scan each enabled path
+    // Scan each enabled path recursively
     for (const pathConfig of enabledPaths) {
       const dirPath = pathConfig.path;
 
@@ -92,47 +212,33 @@ async function scanPhotos() {
       }
 
       try {
-        const files = await fsPromises.readdir(dirPath);
-        let photoCount = 0;
-
-        for (const filename of files) {
-          if (!isImageFile(filename)) continue;
-
-          const filePath = path.join(dirPath, filename);
-
-          try {
-            const stats = await fsPromises.stat(filePath);
-
-            // Skip if it's a directory
-            if (stats.isDirectory()) continue;
-
-            const modified = stats.mtimeMs;
-            const size = stats.size;
-            const id = generatePhotoId(filePath, modified);
-            const dimensions = await getImageDimensions(filePath);
-
-            photosDatabase.push({
-              id,
-              filename,
-              path: filePath,
-              size,
-              modified,
-              dimensions
-            });
-
-            photoCount++;
-          } catch (error) {
-            console.error(`Error processing ${filePath}:`, error.message);
-          }
-        }
-
-        console.log(`  - ${dirPath}: ${photoCount} photos`);
+        const photoCount = await scanDirectoryRecursive(dirPath, photosDatabase);
+        console.log(`  - ${dirPath}: ${photoCount} photos (recursive)`);
       } catch (error) {
         console.error(`Error scanning directory ${dirPath}:`, error.message);
       }
     }
 
-    console.log(`Total photos found: ${photosDatabase.length}`);
+    // Detect manifest changes and notify WebSocket clients
+    const currentPhotoCount = photosDatabase.length;
+    const manifestChanged = currentPhotoCount !== previousPhotoCount;
+
+    console.log(`Total photos found: ${currentPhotoCount}`);
+
+    // Notify Socket.IO clients if manifest changed
+    if (manifestChanged && wsServerInstance) {
+      console.log(`[BROADCAST] Photo count changed: ${previousPhotoCount} -> ${currentPhotoCount}`);
+      wsServerInstance.broadcastToAuthenticated('manifest:updated', {
+        reason: 'PHOTO_SCAN_COMPLETE',
+        previousCount: previousPhotoCount,
+        currentCount: currentPhotoCount,
+        timestamp: Date.now()
+      });
+    } else if (manifestChanged && !wsServerInstance) {
+      console.log(`[WARN] Photo count changed (${previousPhotoCount} -> ${currentPhotoCount}) but Socket.IO server not ready yet`);
+    }
+
+    previousPhotoCount = currentPhotoCount;
   } catch (error) {
     console.error('Error scanning photos:', error.message);
   }
@@ -359,6 +465,91 @@ app.get('/api/paths', (req, res) => {
 });
 
 /**
+ * Get WebRTC Connection Info
+ * GET /api/webrtc-info
+ * Returns WebRTC connection information for QR code generation
+ * Room ID is available immediately, no need to wait for signaling server
+ */
+app.get('/api/webrtc-info', async (req, res) => {
+  try {
+    if (!webrtcManager) {
+      return res.status(503).json({
+        error: 'WebRTC manager not initialized yet. Please wait a moment.',
+        available: false
+      });
+    }
+
+    // Room ID is available immediately after WebRTCManager creation
+    const connectionInfo = webrtcManager.getConnectionInfo();
+    res.json({
+      ...connectionInfo,
+      available: true,
+      ready: webrtcReady, // Indicates if signaling server is connected
+      stats: webrtcManager.getStats()
+    });
+  } catch (error) {
+    console.error('Error getting WebRTC info:', error);
+    res.status(500).json({ error: 'Failed to get WebRTC info' });
+  }
+});
+
+/**
+ * Network Info Endpoint
+ * GET /network-info
+ * Returns all network interfaces and IPs to help discover the server address
+ */
+app.get('/network-info', (req, res) => {
+  const os = require('os');
+  const interfaces = os.networkInterfaces();
+  const addresses = [];
+
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        addresses.push({
+          interface: name,
+          address: iface.address,
+          httpsUrl: `https://${iface.address}:${HTTPS_PORT}`
+        });
+      }
+    }
+  }
+
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>PhotoSync Network Info</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; }
+          h1 { color: #333; }
+          .address { background: #f0f0f0; padding: 15px; margin: 10px 0; border-radius: 8px; }
+          .url { font-family: monospace; font-size: 16px; color: #0066cc; word-break: break-all; }
+          a { display: inline-block; margin-top: 10px; padding: 10px 15px; background: #0066cc; color: white; text-decoration: none; border-radius: 5px; }
+          a:hover { background: #0052a3; }
+        </style>
+      </head>
+      <body>
+        <h1>PhotoSync Server Addresses</h1>
+        <p>Use any of these addresses to access the HTTPS server from iOS:</p>
+        ${addresses.map(addr => `
+          <div class="address">
+            <strong>${addr.interface}</strong><br>
+            <div class="url">${addr.httpsUrl}</div>
+            <a href="${addr.httpsUrl}">Open HTTPS Server</a>
+          </div>
+        `).join('')}
+        <p style="margin-top: 30px; color: #666; font-size: 14px;">
+          Note: You'll need to install the certificate profile first.
+          Visit <a href="/ios-certificate" style="display: inline; padding: 0; background: none; color: #0066cc;">/ios-certificate</a> to set it up.
+        </p>
+      </body>
+    </html>
+  `);
+});
+
+/**
  * 7. Get Path Statistics
  * GET /api/paths/stats
  */
@@ -429,24 +620,429 @@ async function startServer() {
   console.log('Cleaning up cache on startup...');
   await clearDiskCache();
 
-  // Initial photo scan
-  await scanPhotos();
+  // Serve iOS configuration profile for certificate installation
+  app.get('/ios-profile', (req, res) => {
+    const profilePath = path.join(__dirname, 'certificates', 'PhotoSync-CA.mobileconfig');
 
-  // Rescan every 5 minutes
-  setInterval(scanPhotos, 5 * 60 * 1000);
+    if (fs.existsSync(profilePath)) {
+      console.log(`[HTTP] Serving iOS configuration profile to ${req.ip}`);
+      res.setHeader('Content-Type', 'application/x-apple-asconfig');
+      res.setHeader('Content-Disposition', 'attachment; filename="PhotoSync-CA.mobileconfig"');
+      res.sendFile(profilePath);
+    } else {
+      console.warn(`[HTTP] iOS profile requested but not found: ${profilePath}`);
+      res.status(404).send(`
+        <html>
+          <body style="font-family: Arial; padding: 20px;">
+            <h2>❌ iOS Profile Not Found</h2>
+            <p>The iOS configuration profile has not been generated yet.</p>
+            <p><strong>To generate it:</strong></p>
+            <ol>
+              <li>On the server computer, run: <code>npm run generate-ca</code></li>
+              <li>Restart the PhotoSync app</li>
+              <li>Try downloading the profile again</li>
+            </ol>
+          </body>
+        </html>
+      `);
+    }
+  });
 
-  app.listen(PORT, '0.0.0.0', () => {
+  // Serve setup page with installation instructions
+  app.get('/setup', (req, res) => {
+    const profilePath = path.join(__dirname, 'certificates', 'PhotoSync-CA.mobileconfig');
+    const profileExists = fs.existsSync(profilePath);
+    const serverIP = req.headers.host?.split(':')[0] || 'localhost';
+
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>PhotoSync iOS Setup</title>
+          <style>
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+              max-width: 600px;
+              margin: 40px auto;
+              padding: 20px;
+              background: #f5f5f5;
+            }
+            .container {
+              background: white;
+              border-radius: 12px;
+              padding: 30px;
+              box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }
+            h1 {
+              color: #007AFF;
+              margin-top: 0;
+            }
+            h2 {
+              color: #333;
+              border-bottom: 2px solid #007AFF;
+              padding-bottom: 10px;
+            }
+            .step {
+              margin: 20px 0;
+              padding: 15px;
+              background: #f8f9fa;
+              border-left: 4px solid #007AFF;
+              border-radius: 4px;
+            }
+            .step-number {
+              display: inline-block;
+              background: #007AFF;
+              color: white;
+              width: 28px;
+              height: 28px;
+              border-radius: 50%;
+              text-align: center;
+              line-height: 28px;
+              font-weight: bold;
+              margin-right: 10px;
+            }
+            .download-btn {
+              display: inline-block;
+              background: #007AFF;
+              color: white;
+              padding: 15px 30px;
+              border-radius: 8px;
+              text-decoration: none;
+              font-weight: bold;
+              margin: 20px 0;
+              text-align: center;
+              font-size: 18px;
+            }
+            .download-btn:hover {
+              background: #0051D5;
+            }
+            .download-btn:disabled {
+              background: #ccc;
+              cursor: not-allowed;
+            }
+            .warning {
+              background: #fff3cd;
+              border: 1px solid #ffc107;
+              padding: 15px;
+              border-radius: 8px;
+              margin: 20px 0;
+            }
+            .success {
+              background: #d4edda;
+              border: 1px solid #28a745;
+              padding: 15px;
+              border-radius: 8px;
+              margin: 20px 0;
+            }
+            code {
+              background: #f4f4f4;
+              padding: 2px 6px;
+              border-radius: 3px;
+              font-family: 'Courier New', monospace;
+            }
+            .note {
+              font-size: 14px;
+              color: #666;
+              font-style: italic;
+              margin-top: 10px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>📱 PhotoSync iOS Certificate Setup</h1>
+
+            ${profileExists ? `
+              <div class="success">
+                <strong>✅ Certificate Profile Ready!</strong><br>
+                Follow the steps below to install it on your iOS device.
+              </div>
+
+              <h2>Step 1: Download Profile</h2>
+              <p>Tap the button below to download the certificate profile:</p>
+              <a href="/ios-profile" class="download-btn">📥 Download Certificate Profile</a>
+              <p class="note">You should see a prompt asking if you want to allow downloading a configuration profile.</p>
+
+              <h2>Step 2: Install Profile</h2>
+              <div class="step">
+                <span class="step-number">1</span>
+                <strong>Open Settings</strong> on your iPhone/iPad
+              </div>
+              <div class="step">
+                <span class="step-number">2</span>
+                Look for <strong>"Profile Downloaded"</strong> near the top
+              </div>
+              <div class="step">
+                <span class="step-number">3</span>
+                Tap on <strong>"PhotoSync Local CA"</strong>
+              </div>
+              <div class="step">
+                <span class="step-number">4</span>
+                Tap <strong>"Install"</strong> (top right)
+              </div>
+              <div class="step">
+                <span class="step-number">5</span>
+                Enter your device <strong>passcode</strong>
+              </div>
+              <div class="step">
+                <span class="step-number">6</span>
+                Tap <strong>"Install"</strong> again to confirm
+              </div>
+
+              <h2>Step 3: Trust Certificate</h2>
+              <div class="warning">
+                <strong>⚠️ Important:</strong> You must complete this step for the certificate to work!
+              </div>
+              <div class="step">
+                <span class="step-number">1</span>
+                Go to <strong>Settings → General → About</strong>
+              </div>
+              <div class="step">
+                <span class="step-number">2</span>
+                Scroll to the bottom and tap <strong>"Certificate Trust Settings"</strong>
+              </div>
+              <div class="step">
+                <span class="step-number">3</span>
+                Enable the switch for <strong>"PhotoSync Local CA"</strong>
+              </div>
+              <div class="step">
+                <span class="step-number">4</span>
+                Tap <strong>"Continue"</strong> to confirm
+              </div>
+
+              <h2>✨ Done!</h2>
+              <div class="success">
+                <p><strong>Your iOS device is now set up!</strong></p>
+                <p>You can now connect to PhotoSync without any certificate warnings. The certificate is valid for 10 years.</p>
+                <p>Open the PhotoSync PWA and scan the QR code to connect.</p>
+              </div>
+
+              <h2>Troubleshooting</h2>
+              <p><strong>If you see certificate warnings:</strong></p>
+              <ul>
+                <li>Make sure you completed Step 3 (Certificate Trust Settings)</li>
+                <li>Try restarting the PhotoSync PWA</li>
+                <li>Make sure you're connected to the same WiFi network as the server</li>
+              </ul>
+            ` : `
+              <div class="warning">
+                <strong>⚠️ Certificate Not Generated</strong><br>
+                The iOS certificate profile has not been created yet.
+              </div>
+
+              <h2>Server Setup Required</h2>
+              <p>On the computer running PhotoSync Electron, run:</p>
+              <code>npm run generate-ca</code>
+              <p class="note">Then restart the PhotoSync server and refresh this page.</p>
+            `}
+
+            <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;">
+
+            <p style="text-align: center; color: #666; font-size: 14px;">
+              PhotoSync v1.0.0 • Server: ${serverIP}
+            </p>
+          </div>
+        </body>
+      </html>
+    `);
+  });
+
+  // Initialize PhotoDatabase wrapper (before scanning, so API endpoints work immediately)
+  photoDb = new PhotoDatabase();
+
+  // Start HTTP server for API FIRST - this allows health checks to pass immediately
+  app.listen(HTTP_PORT, '0.0.0.0', () => {
     const stats = photoPathsManager.getStats();
     console.log(`\n========================================`);
     console.log(`PhotoSync Server is running`);
     console.log(`========================================`);
-    console.log(`Local:   http://localhost:${PORT}`);
-    console.log(`Network: http://192.168.1.5:${PORT}`);
-    console.log(`Paths:   ${stats.enabled} enabled, ${stats.total} total`);
-    console.log(`Cache:   ${CACHE_DIRECTORY}`);
+    console.log(`HTTP API: http://localhost:${HTTP_PORT}`);
+    console.log(`Paths:    ${stats.enabled} enabled, ${stats.total} total`);
+    console.log(`Cache:    ${CACHE_DIRECTORY}`);
     console.log(`========================================\n`);
   });
-}
+
+  // Initial photo scan (after HTTP server starts, so frontend can connect immediately)
+  // Photos will appear in the gallery once the scan completes
+  console.log('Starting initial photo scan...');
+  await scanPhotos();
+  console.log('Initial photo scan complete');
+
+  // Rescan every 5 minutes
+  setInterval(scanPhotos, 5 * 60 * 1000);
+
+  // Check for SSL certificates (required for WSS)
+  // Prefer CA-signed certificates, fall back to self-signed
+  let certPath = path.join(__dirname, 'certificates', 'server-cert.pem');
+  let keyPath = path.join(__dirname, 'certificates', 'server-key.pem');
+  let usingCA = true;
+
+  if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) {
+    // Fall back to old self-signed certificates
+    certPath = path.join(__dirname, 'cert.pem');
+    keyPath = path.join(__dirname, 'key.pem');
+    usingCA = false;
+    console.log('[HTTPS] CA-signed certificates not found, using self-signed certificates');
+    console.log('[HTTPS] 💡 Run "npm run generate-ca" for better iOS support\n');
+  } else {
+    console.log('[HTTPS] ✅ Using CA-signed certificates');
+    console.log('[HTTPS] iOS devices can install the certificate profile for trusted connections\n');
+  }
+
+  if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) {
+    console.error('[ERROR] No SSL certificates found!');
+    console.error('[ERROR] Run "npm run generate-cert" or "npm run generate-ca" to create certificates');
+    console.error('[ERROR] Certificates are required for secure WebSocket (WSS)\n');
+    process.exit(1);
+  }
+
+  // Create HTTPS server
+  let httpsServer;
+  try {
+    const httpsOptions = {
+      cert: fs.readFileSync(certPath),
+      key: fs.readFileSync(keyPath)
+    };
+
+    httpsServer = https.createServer(httpsOptions, app);
+    httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
+      console.log(`[HTTPS] Secure server listening on port ${HTTPS_PORT}`);
+      console.log(`[HTTPS] Local:   https://localhost:${HTTPS_PORT}`);
+      console.log(`[WSS]   Secure WebSocket enabled\n`);
+    });
+  } catch (error) {
+    console.error('[ERROR] Failed to start HTTPS server:', error.message);
+    process.exit(1);
+  }
+
+  // Start Socket.IO server
+  const wsServer = new SocketIOServer(
+    httpsServer,
+    photoDb,
+    compressImage,
+    CACHE_DIRECTORY
+  );
+  wsServer.start();
+
+  // Store Socket.IO instance for manifest update broadcasts
+  wsServerInstance = wsServer;
+
+  // Initialize WebRTC Manager
+  const signalingServer = process.env.SIGNALING_SERVER || 'ws://localhost:3002';
+
+  // Get room ID from environment variable OR device-config.json
+  let roomId = process.env.WEBRTC_ROOM_ID;
+
+  // Fallback: Read from device-config.json if env var not provided
+  if (!roomId) {
+    try {
+      const deviceConfigPath = path.join(__dirname, 'device-config.json');
+      if (fs.existsSync(deviceConfigPath)) {
+        const configData = JSON.parse(fs.readFileSync(deviceConfigPath, 'utf-8'));
+        roomId = configData.roomId;
+        console.log(`[WebRTC] Read persistent Room ID from device-config.json: ${roomId}`);
+      } else {
+        console.log(`[WebRTC] No device-config.json found, will generate new Room ID`);
+      }
+    } catch (error) {
+      console.error('[WebRTC] Error reading device-config.json:', error);
+    }
+  } else {
+    console.log(`[WebRTC] Using Room ID from environment variable: ${roomId}`);
+  }
+
+  console.log(`\n[WebRTC] Initializing WebRTC Manager...`);
+  console.log(`[WebRTC] Signaling server: ${signalingServer}`);
+  console.log(`[WebRTC] Room ID: ${roomId || 'Will generate new'}`);
+
+  // Create promise that resolves when WebRTC is ready
+  webrtcReadyPromise = new Promise((resolve, reject) => {
+    webrtcManager = new WebRTCManager(photoDb, signalingServer, roomId);
+
+    // Save room ID to file so main.js can read it for QR generation
+    // This ensures both processes use the same room ID
+    const roomIdFilePath = path.join(__dirname, '.webrtc-room-id');
+    const webrtcConfig = {
+      roomId: webrtcManager.roomId,
+      signalingServer: signalingServer,
+      timestamp: Date.now()
+    };
+
+    try {
+      fs.writeFileSync(roomIdFilePath, JSON.stringify(webrtcConfig, null, 2));
+      console.log(`[WebRTC] Saved room ID to file: ${roomIdFilePath}`);
+    } catch (error) {
+      console.error('[WebRTC] Failed to save room ID to file:', error);
+    }
+
+    webrtcManager.on('signaling-connected', ({ roomId }) => {
+      webrtcReady = true;
+      console.log(`[WebRTC] ✅ Connected to signaling server`);
+      console.log(`[WebRTC] Room ID: ${roomId}`);
+      console.log(`\n========================================`);
+      console.log(`WEBRTC CONNECTION INFO FOR QR CODE:`);
+      console.log(`========================================`);
+      console.log(JSON.stringify(webrtcManager.getConnectionInfo(), null, 2));
+      console.log(`========================================\n`);
+      resolve(); // Signal that WebRTC is ready
+    });
+
+    webrtcManager.on('error', (error) => {
+      console.error('[WebRTC] Connection error:', error);
+      // Don't reject - WebRTC will keep retrying
+    });
+
+    // Timeout after 30 seconds if connection fails
+    setTimeout(() => {
+      if (!webrtcReady) {
+        console.warn('[WebRTC] Warning: Signaling server connection taking longer than expected');
+        console.warn('[WebRTC] This is normal if the signaling server is starting up');
+        console.warn('[WebRTC] WebRTC will continue trying to connect in the background');
+      }
+    }, 30000);
+  });
+
+    webrtcManager.on('room-created', ({ roomId }) => {
+      console.log(`[WebRTC] Room ready for connections: ${roomId}`);
+    });
+
+    webrtcManager.on('peer-connected', ({ clientId }) => {
+      console.log(`[WebRTC] ✅ Client connected via P2P: ${clientId}`);
+    });
+
+    webrtcManager.on('peer-disconnected', ({ clientId }) => {
+      console.log(`[WebRTC] ❌ Client disconnected: ${clientId}`);
+    });
+
+    webrtcManager.on('peer-error', ({ clientId, error }) => {
+      console.error(`[WebRTC] Peer error with ${clientId}:`, error.message);
+    });
+
+    webrtcManager.on('signaling-disconnected', () => {
+      webrtcReady = false;
+      console.log(`[WebRTC] ❌ Disconnected from signaling server, attempting to reconnect...`);
+    });
+  };
+
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('\n[Shutdown] Shutting down gracefully...');
+  if (webrtcManager) {
+    webrtcManager.destroy();
+  }
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('\n[Shutdown] Shutting down gracefully...');
+  if (webrtcManager) {
+    webrtcManager.destroy();
+  }
+  process.exit(0);
+});
 
 startServer().catch(error => {
   console.error('Failed to start server:', error);
