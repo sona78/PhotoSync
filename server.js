@@ -89,6 +89,125 @@ class PhotoDatabase {
   hasPhoto(id) {
     return this.database.some(p => p.id === id);
   }
+
+  /**
+   * Get folder structure
+   * @returns {Object} Folder tree structure
+   */
+  getFolderStructure() {
+    const folderMap = new Map();
+
+    // Helper function to ensure a folder exists in the map
+    const ensureFolderExists = (rootPath, folderPath) => {
+      const key = `${rootPath}::${folderPath}`;
+
+      if (!folderMap.has(key)) {
+        folderMap.set(key, {
+          id: crypto.createHash('md5').update(key).digest('hex').substring(0, 16),
+          rootPath: rootPath,
+          folderPath: folderPath,
+          displayName: folderPath === '' ? path.basename(rootPath) : path.basename(folderPath),
+          fullPath: folderPath === '' ? rootPath : path.join(rootPath, folderPath.split('/').join(path.sep)),
+          photoCount: 0,
+          subfolders: []
+        });
+      }
+
+      return folderMap.get(key);
+    };
+
+    // Collect all unique folders and ensure all ancestor folders exist
+    this.database.forEach(photo => {
+      // Ensure root folder exists
+      ensureFolderExists(photo.rootPath, '');
+
+      // Create all ancestor folders in the path
+      if (photo.folderPath !== '') {
+        const pathParts = photo.folderPath.split('/');
+
+        // Create each level of the folder hierarchy
+        for (let i = 0; i < pathParts.length; i++) {
+          const ancestorPath = pathParts.slice(0, i + 1).join('/');
+          ensureFolderExists(photo.rootPath, ancestorPath);
+        }
+      }
+
+      // Increment photo count only for the actual folder containing the photo
+      const key = `${photo.rootPath}::${photo.folderPath}`;
+      const folder = folderMap.get(key);
+      folder.photoCount++;
+    });
+
+    // Build hierarchical structure
+    const rootFolders = [];
+    const folders = Array.from(folderMap.values());
+
+    console.log(`[PhotoDatabase] Building folder hierarchy from ${folders.length} unique folders`);
+
+    folders.forEach(folder => {
+      if (folder.folderPath === '') {
+        // This is a root folder
+        rootFolders.push(folder);
+      } else {
+        // Find parent folder
+        const parentPath = folder.folderPath.split('/').slice(0, -1).join('/');
+        const parentKey = `${folder.rootPath}::${parentPath}`;
+        const parent = folderMap.get(parentKey);
+
+        if (parent && !parent.subfolders.find(sf => sf.id === folder.id)) {
+          parent.subfolders.push(folder);
+        } else if (!parent) {
+          console.warn(`[PhotoDatabase] Parent folder not found for "${folder.folderPath}" (parent: "${parentPath}")`);
+        }
+      }
+    });
+
+    // Calculate recursive photo counts and filter empty folders
+    const calculateRecursiveCount = (folder) => {
+      let totalPhotos = folder.photoCount;
+
+      // Recursively process subfolders
+      folder.subfolders = folder.subfolders.filter(subfolder => {
+        const subfolderCount = calculateRecursiveCount(subfolder);
+        totalPhotos += subfolderCount;
+        return subfolderCount > 0; // Only keep subfolders with photos
+      });
+
+      folder.totalPhotoCount = totalPhotos;
+      return totalPhotos;
+    };
+
+    // Filter root folders to only show those with photos
+    const filteredRootFolders = rootFolders.filter(folder => {
+      return calculateRecursiveCount(folder) > 0;
+    });
+
+    console.log(`[PhotoDatabase] Created ${filteredRootFolders.length} root folders (${rootFolders.length - filteredRootFolders.length} empty folders filtered)`);
+
+    return { folders: filteredRootFolders, totalPhotos: this.database.length };
+  }
+
+  /**
+   * Get photos in a specific folder
+   * @param {string} folderId - Folder ID
+   * @param {boolean} recursive - Include subfolders
+   * @returns {Array<Object>} Array of photo objects
+   */
+  getPhotosInFolder(folderId, recursive = false) {
+    if (folderId === 'all') {
+      return this.database;
+    }
+
+    return this.database.filter(photo => {
+      const photoFolderId = crypto.createHash('md5').update(`${photo.rootPath}::${photo.folderPath}`).digest('hex').substring(0, 16);
+
+      if (recursive) {
+        return photoFolderId === folderId || photoFolderId.startsWith(folderId);
+      } else {
+        return photoFolderId === folderId;
+      }
+    });
+  }
 }
 
 /**
@@ -137,10 +256,16 @@ async function getImageDimensions(filePath) {
  * Recursively scan a directory for image files
  * @param {string} dirPath - Directory to scan
  * @param {Array} results - Array to collect photo objects
+ * @param {string} rootPath - Root path being scanned
  * @returns {Promise<number>} - Number of photos found
  */
-async function scanDirectoryRecursive(dirPath, results = []) {
+async function scanDirectoryRecursive(dirPath, results = [], rootPath = null) {
   let photoCount = 0;
+
+  // If rootPath is not provided, this is the root
+  if (!rootPath) {
+    rootPath = dirPath;
+  }
 
   try {
     const entries = await fsPromises.readdir(dirPath, { withFileTypes: true });
@@ -150,7 +275,7 @@ async function scanDirectoryRecursive(dirPath, results = []) {
 
       if (entry.isDirectory()) {
         // Recursively scan subdirectory
-        const subCount = await scanDirectoryRecursive(fullPath, results);
+        const subCount = await scanDirectoryRecursive(fullPath, results, rootPath);
         photoCount += subCount;
       } else if (entry.isFile() && isImageFile(entry.name)) {
         // Process image file
@@ -159,6 +284,10 @@ async function scanDirectoryRecursive(dirPath, results = []) {
           const id = generatePhotoId(fullPath, stats.mtimeMs);
           const dimensions = await getImageDimensions(fullPath);
 
+          // Calculate relative folder path from root
+          const relativePath = path.relative(rootPath, dirPath);
+          const folderPath = relativePath === '' ? '' : relativePath.split(path.sep).join('/');
+
           results.push({
             id,
             filename: entry.name,
@@ -166,7 +295,9 @@ async function scanDirectoryRecursive(dirPath, results = []) {
             size: stats.size,
             modified: stats.mtimeMs,
             width: dimensions.width,
-            height: dimensions.height
+            height: dimensions.height,
+            rootPath: rootPath,
+            folderPath: folderPath
           });
 
           photoCount++;
@@ -559,6 +690,151 @@ app.get('/api/paths/stats', (req, res) => {
     res.json(stats);
   } catch (error) {
     console.error('Error getting path stats:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Helper: Build folder structure from photos database
+ * @returns {Object} Folder tree structure
+ */
+function buildFolderStructure() {
+  const folderMap = new Map();
+
+  // Helper function to ensure a folder exists in the map
+  const ensureFolderExists = (rootPath, folderPath) => {
+    const key = `${rootPath}::${folderPath}`;
+
+    if (!folderMap.has(key)) {
+      folderMap.set(key, {
+        id: crypto.createHash('md5').update(key).digest('hex').substring(0, 16),
+        rootPath: rootPath,
+        folderPath: folderPath,
+        displayName: folderPath === '' ? path.basename(rootPath) : path.basename(folderPath),
+        fullPath: folderPath === '' ? rootPath : path.join(rootPath, folderPath.split('/').join(path.sep)),
+        photoCount: 0,
+        subfolders: []
+      });
+    }
+
+    return folderMap.get(key);
+  };
+
+  // Collect all unique folders and ensure all ancestor folders exist
+  photosDatabase.forEach(photo => {
+    // Ensure root folder exists
+    ensureFolderExists(photo.rootPath, '');
+
+    // Create all ancestor folders in the path
+    if (photo.folderPath !== '') {
+      const pathParts = photo.folderPath.split('/');
+
+      // Create each level of the folder hierarchy
+      for (let i = 0; i < pathParts.length; i++) {
+        const ancestorPath = pathParts.slice(0, i + 1).join('/');
+        ensureFolderExists(photo.rootPath, ancestorPath);
+      }
+    }
+
+    // Increment photo count only for the actual folder containing the photo
+    const key = `${photo.rootPath}::${photo.folderPath}`;
+    const folder = folderMap.get(key);
+    folder.photoCount++;
+  });
+
+  // Build hierarchical structure
+  const rootFolders = [];
+  const folders = Array.from(folderMap.values());
+
+  console.log(`[Server] Building folder hierarchy from ${folders.length} unique folders`);
+
+  folders.forEach(folder => {
+    if (folder.folderPath === '') {
+      // This is a root folder
+      rootFolders.push(folder);
+    } else {
+      // Find parent folder
+      const parentPath = folder.folderPath.split('/').slice(0, -1).join('/');
+      const parentKey = `${folder.rootPath}::${parentPath}`;
+      const parent = folderMap.get(parentKey);
+
+      if (parent && !parent.subfolders.find(sf => sf.id === folder.id)) {
+        parent.subfolders.push(folder);
+      } else if (!parent) {
+        console.warn(`[Server] Parent folder not found for "${folder.folderPath}" (parent: "${parentPath}")`);
+      }
+    }
+  });
+
+  // Calculate recursive photo counts and filter empty folders
+  const calculateRecursiveCount = (folder) => {
+    let totalPhotos = folder.photoCount;
+
+    // Recursively process subfolders
+    folder.subfolders = folder.subfolders.filter(subfolder => {
+      const subfolderCount = calculateRecursiveCount(subfolder);
+      totalPhotos += subfolderCount;
+      return subfolderCount > 0; // Only keep subfolders with photos
+    });
+
+    folder.totalPhotoCount = totalPhotos;
+    return totalPhotos;
+  };
+
+  // Filter root folders to only show those with photos
+  const filteredRootFolders = rootFolders.filter(folder => {
+    return calculateRecursiveCount(folder) > 0;
+  });
+
+  console.log(`[Server] Created ${filteredRootFolders.length} root folders (${rootFolders.length - filteredRootFolders.length} empty folders filtered)`);
+
+  return { folders: filteredRootFolders, totalPhotos: photosDatabase.length };
+}
+
+/**
+ * 8. Get Folder Structure
+ * GET /api/folders
+ */
+app.get('/api/folders', (req, res) => {
+  try {
+    const structure = buildFolderStructure();
+    res.json(structure);
+  } catch (error) {
+    console.error('Error building folder structure:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * 9. Get Photos in Folder
+ * GET /api/folders/:folderId
+ */
+app.get('/api/folders/:folderId', (req, res) => {
+  try {
+    const { folderId } = req.params;
+    const recursive = req.query.recursive === 'true';
+
+    // Special case: "all" returns all photos
+    if (folderId === 'all') {
+      return res.json(photosDatabase);
+    }
+
+    // Find photos in the specified folder
+    const photos = photosDatabase.filter(photo => {
+      const photoFolderId = crypto.createHash('md5').update(`${photo.rootPath}::${photo.folderPath}`).digest('hex').substring(0, 16);
+
+      if (recursive) {
+        // Include this folder and all subfolders
+        return photoFolderId === folderId || photoFolderId.startsWith(folderId);
+      } else {
+        // Only this folder
+        return photoFolderId === folderId;
+      }
+    });
+
+    res.json(photos);
+  } catch (error) {
+    console.error('Error getting folder photos:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

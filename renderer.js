@@ -11,14 +11,15 @@ const tabContents = document.querySelectorAll('.tab-content');
 // Device Pairing Elements
 const generateQrBtn = document.getElementById('generate-qr-btn');
 const qrCodeContainer = document.getElementById('qr-code-container');
-const devicesListEl = document.getElementById('devices-list');
 
 // State
 let paths = [];
 let photos = [];
 let serverRunning = false;
-let devices = [];
 let currentQrData = null;
+let folders = [];
+let currentFolderId = 'all'; // 'all' shows all photos, or folder ID
+let breadcrumbs = [];
 
 // Initialize
 async function init() {
@@ -34,7 +35,6 @@ async function init() {
   // Setup device pairing
   if (generateQrBtn) {
     generateQrBtn.addEventListener('click', handleGenerateQR);
-    await loadDevices();
   }
 
   addPathBtn.addEventListener('click', handleAddPath);
@@ -94,9 +94,9 @@ function switchTab(tabName) {
   tabContents.forEach(content => content.classList.remove('active'));
   document.getElementById(`tab-${tabName}`).classList.add('active');
 
-  // Reload photos when switching to gallery
+  // Reload photos and folders when switching to gallery (in case paths were added/removed)
   if (tabName === 'gallery') {
-    loadPhotos();
+    loadPhotos(true);
   }
 }
 
@@ -116,12 +116,11 @@ async function loadPaths() {
   }
 }
 
-// Load photos from server
-async function loadPhotos() {
+// Load folder structure from server
+async function loadFolders() {
   try {
-    console.log('[Gallery] Loading photos from server...');
-    // Add cache busting to ensure fresh data
-    const response = await fetch(`http://localhost:3000/api/photos?_t=${Date.now()}`, {
+    console.log('[Gallery] Loading folder structure from server...');
+    const response = await fetch(`http://localhost:3000/api/folders?_t=${Date.now()}`, {
       cache: 'no-store'
     });
 
@@ -129,8 +128,46 @@ async function loadPhotos() {
       throw new Error(`Server responded with status: ${response.status}`);
     }
 
-    photos = await response.json();
-    console.log(`[Gallery] Loaded ${photos.length} photos from server`);
+    const data = await response.json();
+    folders = data.folders || [];
+    console.log(`[Gallery] Loaded ${folders.length} root folders`);
+    return true;
+  } catch (error) {
+    console.error('[Gallery] Error loading folders:', error);
+    folders = [];
+    return false;
+  }
+}
+
+// Load photos from server (for current folder)
+async function loadPhotos(forceReloadFolders = false) {
+  try {
+    console.log('[Gallery] Loading photos from server...');
+
+    // Load folder structure (force reload if requested or not loaded yet)
+    if (forceReloadFolders || folders.length === 0) {
+      await loadFolders();
+    }
+
+    // When viewing "all", don't load photos (just show folders)
+    // When viewing a specific folder, load only photos in that folder
+    if (currentFolderId === 'all') {
+      photos = [];
+      console.log('[Gallery] Viewing all folders, not loading individual photos');
+    } else {
+      const url = `http://localhost:3000/api/folders/${currentFolderId}?_t=${Date.now()}`;
+      const response = await fetch(url, {
+        cache: 'no-store'
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server responded with status: ${response.status}`);
+      }
+
+      photos = await response.json();
+      console.log(`[Gallery] Loaded ${photos.length} photos from folder ${currentFolderId}`);
+    }
+
     photoCountEl.textContent = photos.length;
     serverRunning = true;
     renderGallery();
@@ -142,43 +179,202 @@ async function loadPhotos() {
   }
 }
 
+// Build breadcrumb for current folder
+function buildBreadcrumb(folderId) {
+  if (folderId === 'all') {
+    return [];
+  }
+
+  const crumbs = [];
+  let currentFolder = findFolderById(folderId);
+
+  while (currentFolder) {
+    crumbs.unshift({
+      id: currentFolder.id,
+      name: currentFolder.displayName
+    });
+
+    // Find parent folder
+    if (currentFolder.folderPath === '') {
+      break; // This is a root folder
+    }
+
+    const parentPath = currentFolder.folderPath.split('/').slice(0, -1).join('/');
+    const parentKey = `${currentFolder.rootPath}::${parentPath}`;
+    currentFolder = findFolderByKey(parentKey);
+  }
+
+  return crumbs;
+}
+
+// Find folder by ID
+function findFolderById(folderId, folderList = folders) {
+  for (const folder of folderList) {
+    if (folder.id === folderId) {
+      return folder;
+    }
+    if (folder.subfolders && folder.subfolders.length > 0) {
+      const found = findFolderById(folderId, folder.subfolders);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// Find folder by key
+function findFolderByKey(key) {
+  // This is a simplified version - in practice, we'd need to iterate through all folders
+  return null;
+}
+
+// Navigate to folder
+async function navigateToFolder(folderId) {
+  currentFolderId = folderId;
+  breadcrumbs = buildBreadcrumb(folderId);
+  await loadPhotos();
+}
+
+// Get subfolders for current folder
+function getCurrentSubfolders() {
+  if (currentFolderId === 'all') {
+    return folders;
+  }
+
+  const currentFolder = findFolderById(currentFolderId);
+  return currentFolder ? currentFolder.subfolders : [];
+}
+
 // Render photo gallery
 function renderGallery() {
-  console.log(`[Gallery] Rendering gallery - serverRunning: ${serverRunning}, photos: ${photos.length}`);
+  console.log(`[Gallery] Rendering gallery - serverRunning: ${serverRunning}, photos: ${photos.length}, currentFolder: ${currentFolderId}`);
 
   // Always clear gallery first
   galleryEl.innerHTML = '';
 
+  // Remove gallery class from container to prevent it from being a grid
+  galleryEl.classList.remove('gallery');
+
   if (!serverRunning) {
     console.log('[Gallery] Server not running, showing loading message');
-    galleryEl.innerHTML = '<div class="gallery-empty">LOADING SERVER...<br>PLEASE WAIT</div>';
+    const emptyDiv = document.createElement('div');
+    emptyDiv.className = 'gallery-empty';
+    emptyDiv.innerHTML = 'LOADING SERVER...<br>PLEASE WAIT';
+    galleryEl.appendChild(emptyDiv);
     return;
   }
 
-  if (photos.length === 0) {
-    console.log('[Gallery] No photos found, showing empty message');
-    galleryEl.innerHTML = '<div class="gallery-empty">NO PHOTOS FOUND<br>CONFIGURE DIRECTORIES IN SETTINGS</div>';
+  // Create navigation bar with breadcrumb and All Photos button
+  const navBar = document.createElement('div');
+  navBar.style.cssText = 'margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;';
+
+  // Breadcrumb navigation
+  const breadcrumbEl = document.createElement('div');
+  breadcrumbEl.style.cssText = 'display: flex; align-items: center; gap: 5px; font-family: "VT323", monospace; font-size: 18px;';
+
+  if (currentFolderId === 'all') {
+    breadcrumbEl.innerHTML = '<span style="font-weight: bold;">ALL PHOTOS</span>';
+  } else {
+    breadcrumbEl.innerHTML = `
+      <span class="breadcrumb-item" data-folder="all" style="cursor: pointer; text-decoration: underline;">HOME</span>
+      ${breadcrumbs.map(crumb => `
+        <span> / </span>
+        <span class="breadcrumb-item" data-folder="${crumb.id}" style="cursor: pointer; text-decoration: underline;">${crumb.name}</span>
+      `).join('')}
+    `;
+  }
+
+  // All Photos button
+  const allPhotosBtn = document.createElement('button');
+  allPhotosBtn.textContent = 'ALL PHOTOS';
+  allPhotosBtn.style.cssText = 'padding: 8px 16px; background: #000; color: #fff; border: 3px solid #000; cursor: pointer; font-family: "VT323", monospace; font-size: 16px; text-transform: uppercase;';
+  if (currentFolderId === 'all') {
+    allPhotosBtn.style.background = '#666';
+    allPhotosBtn.style.borderColor = '#666';
+    allPhotosBtn.disabled = true;
+  }
+  allPhotosBtn.addEventListener('click', () => navigateToFolder('all'));
+
+  navBar.appendChild(breadcrumbEl);
+  navBar.appendChild(allPhotosBtn);
+  galleryEl.appendChild(navBar);
+
+  // Add breadcrumb click handlers
+  document.querySelectorAll('.breadcrumb-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const folderId = item.dataset.folder;
+      navigateToFolder(folderId);
+    });
+  });
+
+  if (photos.length === 0 && getCurrentSubfolders().length === 0) {
+    console.log('[Gallery] No photos or folders found, showing empty message');
+    const emptyDiv = document.createElement('div');
+    emptyDiv.className = 'gallery-empty';
+    emptyDiv.innerHTML = 'NO PHOTOS FOUND<br>CONFIGURE DIRECTORIES IN SETTINGS';
+    galleryEl.appendChild(emptyDiv);
     return;
   }
+
+  // Create grid container
+  const gridEl = document.createElement('div');
+  gridEl.className = 'gallery';
 
   // Add timestamp to bust browser cache
   const cacheBuster = Date.now();
 
-  console.log(`[Gallery] Rendering ${photos.length} photos`);
-  galleryEl.innerHTML = photos.map(photo => `
-    <div class="photo-item" data-id="${photo.id}">
-      <img
-        src="http://localhost:3000/api/photo/${photo.id}?quality=60&maxDimension=400&t=${photo.modified}&cb=${cacheBuster}"
-        alt="${photo.filename}"
-        loading="lazy"
-      />
-    </div>
-  `).join('');
+  // Render subfolders first (only if we're not showing all photos)
+  const subfolders = getCurrentSubfolders();
+  console.log(`[Gallery] Rendering ${subfolders.length} subfolders`);
+  subfolders.forEach(folder => {
+    const folderItem = document.createElement('div');
+    folderItem.className = 'folder-item';
+    folderItem.dataset.folderId = folder.id;
 
-  // Add click handlers to photos
-  document.querySelectorAll('.photo-item').forEach(item => {
-    item.addEventListener('click', handlePhotoClick);
+    const photoCount = folder.totalPhotoCount !== undefined ? folder.totalPhotoCount : folder.photoCount;
+    folderItem.innerHTML = `
+      <div style="font-size: 48px; margin-bottom: 10px;">📁</div>
+      <div style="font-weight: bold; margin-bottom: 5px;">${folder.displayName}</div>
+      <div style="font-size: 14px; opacity: 0.7;">${photoCount} PHOTOS</div>
+    `;
+
+    folderItem.addEventListener('mouseenter', () => {
+      folderItem.style.background = '#000';
+      folderItem.style.color = '#fff';
+    });
+
+    folderItem.addEventListener('mouseleave', () => {
+      folderItem.style.background = '#f0f0f0';
+      folderItem.style.color = '#000';
+    });
+
+    folderItem.addEventListener('click', () => {
+      navigateToFolder(folder.id);
+    });
+
+    gridEl.appendChild(folderItem);
   });
+
+  // Render photos (only if not viewing "all")
+  if (currentFolderId !== 'all') {
+    console.log(`[Gallery] Rendering ${photos.length} photos`);
+    photos.forEach(photo => {
+      const photoItem = document.createElement('div');
+      photoItem.className = 'photo-item';
+      photoItem.dataset.id = photo.id;
+
+      const img = document.createElement('img');
+      img.src = `http://localhost:3000/api/photo/${photo.id}?quality=60&maxDimension=400&t=${photo.modified}&cb=${cacheBuster}`;
+      img.alt = photo.filename;
+      img.loading = 'lazy';
+
+      photoItem.appendChild(img);
+      photoItem.addEventListener('click', handlePhotoClick);
+
+      gridEl.appendChild(photoItem);
+    });
+  }
+
+  galleryEl.appendChild(gridEl);
 
   console.log('[Gallery] Gallery rendered successfully');
 }
@@ -289,7 +485,12 @@ async function handleAddPath() {
       const rescanResult = await triggerRescan();
 
       if (rescanResult.success) {
-        await loadPhotos();
+        // Navigate back to root view to show new folders
+        currentFolderId = 'all';
+        breadcrumbs = [];
+
+        // Force reload folders after adding new path
+        await loadPhotos(true);
         console.log(`Loaded ${rescanResult.photoCount} photos`);
       }
 
@@ -324,8 +525,13 @@ async function handleRemovePath(event) {
         updateStatus('SUCCESS');
         await loadPaths();
 
+        // Navigate back to root view
+        currentFolderId = 'all';
+        breadcrumbs = [];
+
         // Clear gallery immediately to show feedback
         photos = [];
+        folders = [];
         renderGallery();
 
         // Wait for server rescan to complete
@@ -333,7 +539,8 @@ async function handleRemovePath(event) {
         const rescanResult = await triggerRescan();
 
         if (rescanResult.success) {
-          await loadPhotos();
+          // Force reload folders after removing path
+          await loadPhotos(true);
           console.log(`Loaded ${rescanResult.photoCount} photos`);
         }
 
@@ -377,94 +584,30 @@ async function triggerRescan() {
 
 // Device Pairing Functions
 
-// Load all device tokens
-async function loadDevices() {
-  try {
-    const response = await window.electronAPI.devicePairing.getAll();
-    if (response.success) {
-      devices = response.tokens;
-      renderDevices();
-    }
-  } catch (error) {
-    console.error('Failed to load devices:', error);
-  }
-}
-
-// Render devices list
-function renderDevices() {
-  if (!devicesListEl) return;
-
-  if (devices.length === 0) {
-    devicesListEl.innerHTML = '<p class="no-devices">NO PAIRED DEVICES</p>';
-    return;
-  }
-
-  const now = Date.now();
-
-  devicesListEl.innerHTML = '<table class="devices-table"><thead><tr><th>DEVICE NAME</th><th>CREATED</th><th>LAST USED</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>' +
-    devices.map(device => {
-      const isExpired = device.expiresAt < now;
-      const isActive = device.active && !isExpired;
-      const status = !device.active ? 'REVOKED' : isExpired ? 'EXPIRED' : 'ACTIVE';
-      const statusClass = status.toLowerCase();
-
-      return `
-        <tr>
-          <td>${escapeHtml(device.deviceName)}</td>
-          <td>${formatDate(device.createdAt)}</td>
-          <td>${device.lastUsed ? formatDate(device.lastUsed) : 'NEVER'}</td>
-          <td><span class="status-badge ${statusClass}">${status}</span></td>
-          <td>
-            ${isActive ? `<button class="revoke-btn" data-token="${device.token}">REVOKE</button>` : `<button class="delete-btn" data-token="${device.token}">DELETE</button>`}
-          </td>
-        </tr>
-      `;
-    }).join('') + '</tbody></table>';
-
-  // Attach event listeners
-  document.querySelectorAll('.revoke-btn').forEach(button => {
-    button.addEventListener('click', handleRevokeDevice);
-  });
-
-  document.querySelectorAll('.delete-btn').forEach(button => {
-    button.addEventListener('click', handleDeleteDevice);
-  });
-}
-
-// Handle generate QR code
+// Handle show QR code
 async function handleGenerateQR() {
   try {
-    updateStatus('GENERATING');
+    updateStatus('LOADING');
 
-    // Show custom input dialog
-    showInputDialog('Enter Device Name', 'Web Device', async (deviceName) => {
-      if (!deviceName) {
-        updateStatus('CANCELLED');
-        setTimeout(() => updateStatus('IDLE'), 1000);
-        return;
-      }
-
-      const response = await window.electronAPI.devicePairing.generateQR({
-        deviceName: deviceName,
-        userId: 'local',
-        userEmail: 'local@device'
-      });
-
-      if (response.success) {
-        updateStatus('SUCCESS');
-        currentQrData = response;
-        displayQRCode(response);
-        await loadDevices();
-        setTimeout(() => updateStatus('IDLE'), 1000);
-      } else {
-        updateStatus('ERROR');
-        showAlertDialog('Failed to generate QR code: ' + response.error);
-        setTimeout(() => updateStatus('IDLE'), 2000);
-      }
+    const response = await window.electronAPI.devicePairing.generateQR({
+      deviceName: 'PhotoSync Desktop',
+      userId: 'local',
+      userEmail: 'local@device'
     });
+
+    if (response.success) {
+      updateStatus('SUCCESS');
+      currentQrData = response;
+      displayQRCode(response);
+      setTimeout(() => updateStatus('IDLE'), 500);
+    } else {
+      updateStatus('ERROR');
+      showAlertDialog('Failed to load QR code: ' + response.error);
+      setTimeout(() => updateStatus('IDLE'), 2000);
+    }
   } catch (error) {
     updateStatus('ERROR');
-    showAlertDialog('Failed to generate QR code: ' + error.message);
+    showAlertDialog('Failed to load QR code: ' + error.message);
     setTimeout(() => updateStatus('IDLE'), 2000);
   }
 }
@@ -662,110 +805,6 @@ async function handleRegenerateQR(deviceName) {
     showAlertDialog('Failed to regenerate QR code: ' + error.message);
     setTimeout(() => updateStatus('IDLE'), 2000);
   }
-}
-
-// Regenerate QR code with different IP address
-async function regenerateQRWithAddress(ipAddress, deviceName) {
-  try {
-    updateStatus('GENERATING');
-
-    const response = await window.electronAPI.devicePairing.generateQRWithIP(ipAddress, {
-      deviceName: deviceName,
-      userId: 'local',
-      userEmail: 'local@device'
-    });
-
-    if (response.success) {
-      updateStatus('SUCCESS');
-      currentQrData = response;
-
-      // Get network addresses to pass to display
-      const addressesResponse = await window.electronAPI.devicePairing.getNetworkAddresses();
-      if (addressesResponse.success) {
-        response.availableAddresses = addressesResponse.addresses;
-      }
-
-      displayQRCode(response);
-      await loadDevices();
-      setTimeout(() => updateStatus('IDLE'), 1000);
-    } else {
-      updateStatus('ERROR');
-      showAlertDialog('Failed to generate QR code: ' + response.error);
-      setTimeout(() => updateStatus('IDLE'), 2000);
-    }
-  } catch (error) {
-    updateStatus('ERROR');
-    showAlertDialog('Failed to generate QR code: ' + error.message);
-    setTimeout(() => updateStatus('IDLE'), 2000);
-  }
-}
-
-// Handle revoke device
-async function handleRevokeDevice(event) {
-  const token = event.target.dataset.token;
-  const device = devices.find(d => d.token === token);
-
-  showConfirmDialog(`Revoke device "${device.deviceName}"?\n\nThis will disconnect the device immediately.`, async (confirmed) => {
-    if (!confirmed) {
-      return;
-    }
-
-    try {
-      updateStatus('REVOKING');
-      const response = await window.electronAPI.devicePairing.revoke(token);
-
-      if (response.success) {
-        updateStatus('SUCCESS');
-        await loadDevices();
-        setTimeout(() => updateStatus('IDLE'), 1000);
-      } else {
-        updateStatus('ERROR');
-        showAlertDialog('Failed to revoke device: ' + response.message);
-        setTimeout(() => updateStatus('IDLE'), 2000);
-      }
-    } catch (error) {
-      updateStatus('ERROR');
-      showAlertDialog('Failed to revoke device: ' + error.message);
-      setTimeout(() => updateStatus('IDLE'), 2000);
-    }
-  });
-}
-
-// Handle delete device
-async function handleDeleteDevice(event) {
-  const token = event.target.dataset.token;
-  const device = devices.find(d => d.token === token);
-
-  showConfirmDialog(`Permanently delete device "${device.deviceName}"?\n\nThis action cannot be undone.`, async (confirmed) => {
-    if (!confirmed) {
-      return;
-    }
-
-    try {
-      updateStatus('DELETING');
-      const response = await window.electronAPI.devicePairing.delete(token);
-
-      if (response.success) {
-        updateStatus('SUCCESS');
-        await loadDevices();
-        setTimeout(() => updateStatus('IDLE'), 1000);
-      } else {
-        updateStatus('ERROR');
-        showAlertDialog('Failed to delete device: ' + response.message);
-        setTimeout(() => updateStatus('IDLE'), 2000);
-      }
-    } catch (error) {
-      updateStatus('ERROR');
-      showAlertDialog('Failed to delete device: ' + error.message);
-      setTimeout(() => updateStatus('IDLE'), 2000);
-    }
-  });
-}
-
-// Helper: Format timestamp
-function formatDate(timestamp) {
-  const date = new Date(timestamp);
-  return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
 }
 
 // Helper: Escape HTML

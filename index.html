@@ -85,6 +85,20 @@
       display: block;
     }
 
+    .folder-item {
+      background: #f0f0f0;
+      border: 3px solid #000;
+      aspect-ratio: 1;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      text-align: center;
+      transition: background 0.2s, color 0.2s;
+    }
+
     .photo-loading {
       display: flex;
       align-items: center;
@@ -551,113 +565,6 @@
       padding: 12px 30px;
     }
 
-    #devices-list {
-      border: 3px solid #000;
-      background: #fff;
-      min-height: 200px;
-    }
-
-    .no-devices {
-      color: #999;
-      font-size: 18px;
-      text-align: center;
-      padding: 80px 20px;
-      letter-spacing: 1px;
-    }
-
-    .devices-table {
-      width: 100%;
-      border-collapse: collapse;
-    }
-
-    .devices-table thead {
-      background: #f0f0f0;
-      border-bottom: 3px solid #000;
-    }
-
-    .devices-table th {
-      padding: 12px 16px;
-      text-align: left;
-      font-size: 18px;
-      letter-spacing: 1px;
-      color: #000;
-      border-right: 2px solid #ccc;
-    }
-
-    .devices-table th:last-child {
-      border-right: none;
-    }
-
-    .devices-table td {
-      padding: 12px 16px;
-      border-bottom: 2px solid #ccc;
-      border-right: 2px solid #e0e0e0;
-      font-size: 16px;
-    }
-
-    .devices-table td:last-child {
-      border-right: none;
-    }
-
-    .devices-table tbody tr:last-child td {
-      border-bottom: none;
-    }
-
-    .devices-table tbody tr:hover {
-      background: #f5f5f5;
-    }
-
-    .status-badge {
-      display: inline-block;
-      padding: 4px 12px;
-      border: 2px solid #000;
-      font-size: 14px;
-      letter-spacing: 1px;
-    }
-
-    .status-badge.active {
-      background: #00ff00;
-      color: #000;
-      border-color: #00aa00;
-    }
-
-    .status-badge.revoked {
-      background: #ff0000;
-      color: #fff;
-      border-color: #aa0000;
-    }
-
-    .status-badge.expired {
-      background: #ffaa00;
-      color: #000;
-      border-color: #aa6600;
-    }
-
-    .revoke-btn {
-      padding: 6px 12px;
-      font-size: 16px;
-      background: #fff;
-      border: 2px solid #ff0000;
-      color: #ff0000;
-    }
-
-    .revoke-btn:hover {
-      background: #ff0000;
-      color: #fff;
-    }
-
-    .delete-btn {
-      padding: 6px 12px;
-      font-size: 16px;
-      background: #fff;
-      border: 2px solid #000;
-      color: #000;
-    }
-
-    .delete-btn:hover {
-      background: #000;
-      color: #fff;
-    }
 
     /* Custom Dialog Styles */
     .custom-dialog-overlay {
@@ -753,17 +660,6 @@
         </div>
       </div>
 
-      <!-- Connect Device Tab -->
-      <div id="tab-devices" class="tab-content">
-        <div class="section-title">DEVICE PAIRING</div>
-        <button id="generate-qr-btn">GENERATE QR CODE</button>
-        <div id="qr-code-container"></div>
-        <div class="section-title" style="margin-top: 30px;">PAIRED DEVICES</div>
-        <div id="devices-list">
-          <p class="no-devices">NO PAIRED DEVICES</p>
-        </div>
-      </div>
-
       <!-- Settings Tab -->
       <div id="tab-settings" class="tab-content">
         <div class="section-title">DIRECTORY MANAGER</div>
@@ -771,13 +667,16 @@
         <div id="paths-list">
           <p>NO DIRECTORIES</p>
         </div>
+
+        <div class="section-title" style="margin-top: 40px;">DEVICE PAIRING</div>
+        <button id="generate-qr-btn">SHOW QR CODE</button>
+        <div id="qr-code-container"></div>
       </div>
     </div>
 
     <!-- Tab Bar -->
     <div class="tab-bar">
       <div class="tab active" data-tab="gallery">GALLERY</div>
-      <div class="tab" data-tab="devices">DEVICES</div>
       <div class="tab" data-tab="settings">SETTINGS</div>
     </div>
 

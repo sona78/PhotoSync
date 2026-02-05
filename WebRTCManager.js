@@ -333,6 +333,14 @@ class WebRTCManager extends EventEmitter {
           this.sendPhoto(clientId, message.photoId, message.quality, message.maxDimension);
           break;
 
+        case 'request-folders':
+          this.sendFolderStructure(clientId);
+          break;
+
+        case 'request-folder-photos':
+          this.sendFolderPhotos(clientId, message.folderId, message.recursive);
+          break;
+
         case 'ping':
           // Respond to P2P ping
           this.sendToPeer(clientId, { type: 'pong', timestamp: message.timestamp });
@@ -361,12 +369,15 @@ class WebRTCManager extends EventEmitter {
     const photos = this.photoDb.getAllPhotos();
     const manifest = photos.map(photo => ({
       id: photo.id,
+      filename: photo.filename,
       name: photo.name,
       size: photo.size,
       width: photo.width,
       height: photo.height,
       modified: photo.modified,
-      created: photo.created
+      created: photo.created,
+      rootPath: photo.rootPath,
+      folderPath: photo.folderPath
     }));
 
     this.sendToPeer(clientId, {
@@ -376,6 +387,47 @@ class WebRTCManager extends EventEmitter {
     });
 
     console.log(`[WebRTC] Sent manifest to ${clientId}: ${manifest.length} photos`);
+  }
+
+  /**
+   * Send folder structure to peer
+   */
+  sendFolderStructure(clientId) {
+    const structure = this.photoDb.getFolderStructure();
+
+    this.sendToPeer(clientId, {
+      type: 'folder-structure',
+      folders: structure.folders,
+      totalPhotos: structure.totalPhotos
+    });
+
+    console.log(`[WebRTC] Sent folder structure to ${clientId}: ${structure.folders.length} root folders, ${structure.totalPhotos} total photos`);
+  }
+
+  /**
+   * Send photos in a specific folder to peer
+   */
+  sendFolderPhotos(clientId, folderId, recursive = false) {
+    const photos = this.photoDb.getPhotosInFolder(folderId, recursive);
+    const manifest = photos.map(photo => ({
+      id: photo.id,
+      filename: photo.filename,
+      size: photo.size,
+      width: photo.width,
+      height: photo.height,
+      modified: photo.modified,
+      rootPath: photo.rootPath,
+      folderPath: photo.folderPath
+    }));
+
+    this.sendToPeer(clientId, {
+      type: 'folder-photos',
+      folderId: folderId,
+      photos: manifest,
+      count: manifest.length
+    });
+
+    console.log(`[WebRTC] Sent folder photos to ${clientId}: ${manifest.length} photos in folder ${folderId}`);
   }
 
   /**
