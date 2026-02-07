@@ -3,7 +3,7 @@
 	"roomId": "4fb47485ef66a2a9",
 	"deviceName": "Desktop Device",
 	"createdAt": 1770221594635,
-	"lastUsed": 1770328145922,
+	"lastUsed": 1770353348006,
 	"qrConfig": {
 		"type": "webrtc",
 		"signalingServer": "wss://photosync-signaling.onrender.com",

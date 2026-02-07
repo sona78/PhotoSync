@@ -338,7 +338,7 @@ class WebRTCManager extends EventEmitter {
           break;
 
         case 'request-folder-photos':
-          this.sendFolderPhotos(clientId, message.folderId, message.recursive);
+          this.sendFolderPhotos(clientId, message.folderId, message.recursive, message.offset, message.limit);
           break;
 
         case 'ping':
@@ -407,8 +407,12 @@ class WebRTCManager extends EventEmitter {
   /**
    * Send photos in a specific folder to peer
    */
-  sendFolderPhotos(clientId, folderId, recursive = false) {
-    const photos = this.photoDb.getPhotosInFolder(folderId, recursive);
+  sendFolderPhotos(clientId, folderId, recursive = false, offset = 0, limit = 200) {
+    const allPhotos = this.photoDb.getPhotosInFolder(folderId, recursive);
+    const totalCount = allPhotos.length;
+
+    // Apply pagination
+    const photos = allPhotos.slice(offset, offset + limit);
     const manifest = photos.map(photo => ({
       id: photo.id,
       filename: photo.filename,
@@ -424,10 +428,13 @@ class WebRTCManager extends EventEmitter {
       type: 'folder-photos',
       folderId: folderId,
       photos: manifest,
-      count: manifest.length
+      count: manifest.length,
+      totalCount: totalCount,
+      offset: offset,
+      hasMore: offset + limit < totalCount
     });
 
-    console.log(`[WebRTC] Sent folder photos to ${clientId}: ${manifest.length} photos in folder ${folderId}`);
+    console.log(`[WebRTC] Sent folder photos to ${clientId}: ${manifest.length}/${totalCount} photos in folder ${folderId} (offset: ${offset})`);
   }
 
   /**
